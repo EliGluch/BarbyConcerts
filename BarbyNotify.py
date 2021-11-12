@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 
+import re
 import os
 import sys
 import json
@@ -10,52 +11,46 @@ from bs4 import BeautifulSoup
 base_site = "https://www.barby.co.il/"
 
 def main():
-    try:
-        allShows = getData()
-        newShows = getNewShows(allShows)
+    newShows = getData()
 
-        if newShows:
-            emailShows(newShows)
-            writeData(allShows)
-
-    except:
-        sendEmail("Failed to run Barby Notifyer", '')
+    if newShows:
+        print('emailing the new shows:\n' + str(newShows))
+        emailShows(newShows)
+        allShows = get_all_shows(newShows)
+        writeData(allShows)
 
 def emailShows(newShows):
     subject = 'New Barby show%s posted!' % 's' if len(newShows) > 1 else ''
 
     body = ''
 
-    for date, name in newShows.items():
-        body += f"{name}, {date} \n"
+    for date, priceAndName in newShows.items():
+        price = priceAndName['price']
+        bandName = priceAndName['bandName']
+        body += f"{bandName},  {date} -- {price} Shekel \n"
 
     Mail.send_email(subject=subject, body=body)
 
-def getNewShows(allShows):
+def get_all_shows(newShows):
+    with open('barbyShows.txt', "r", encoding="utf8") as json_file:
+        oldShows = json.load(json_file)
+
+    allShows = {**oldShows, **newShows} if oldShows else newShows
+
+    return allShows
+
+def getData():
     newShows = {}
 
     with open('barbyShows.txt', "r", encoding="utf8") as json_file:
-        oldShows =  json.load(json_file)
-    
-    for date, bandName in allShows.items():
-        if date not in oldShows:
-            newShows[date] = bandName
+        oldShows = json.load(json_file)
 
-    return newShows
-
-def getData():
     response = requests.get(base_site, headers={'User-Agent': 'Mozilla/5.0'})
 
-    print(response)
     html = response.content
     soup = BeautifulSoup(html, 'lxml')
 
-    with open('barby.html', 'wb') as file:
-        file.write(soup.prettify('utf-8'))
-
     bandDivs = soup.find_all('td', class_="defaultRowHeight")
-
-    shows = {}
 
     for band in bandDivs:
         # For some reason some have Big
@@ -63,14 +58,32 @@ def getData():
         nameNoBig = band.find('div', class_="inlineDefName")
         bandName  = nameBig.text if nameBig else nameNoBig.text
         time      = band.find('div', class_="def_titel2A").text
-        
-        shows[time] = bandName
 
-    return shows
+        # This is a new show
+        if time not in oldShows.keys():
+            SiteDiv = band.find('div', class_='defShowListDescDiv')
+            SpecificShowPage  = SiteDiv.find('a').attrs['href']
+            FullSite = base_site + SpecificShowPage
+            price = get_price_of_show(FullSite)
+            newShows[time] = {'bandName' : bandName, 'price' : price}
 
-# def sendEmail(subject, body):
-#     Mail.send_email(subject=subject, body=body)
+    return newShows
 
+def get_price_of_show(site):
+    response = requests.get(site, headers={'User-Agent': 'Mozilla/5.0'})
+
+    html = response.content
+    soup = BeautifulSoup(html, 'lxml')
+
+    try:
+        priceText = soup.find('span', class_="showCatlbPrice").text
+        price = re.search(r'\d+', priceText)
+        price = price.group(0)
+
+    except:
+        priceText = 'None'
+
+    return price
 
 def writeData(data):
     with open('barbyShows.txt', 'w', encoding='utf-8') as outfile:
